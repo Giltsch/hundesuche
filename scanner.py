@@ -34,6 +34,7 @@ QUERIES = [
     "schäferhund rüde", "husky rüde", "altdeutscher schäferhund", "wolfshund",
     "schäferhund abzugeben", "husky abzugeben", "rüde abzugeben", "hund abzugeben",
     "schäferhund zugelaufen", "hund zugelaufen", "hund gefunden",
+    "schäferhund husky schutzgebühr", "husky mix tierschutz", "schäferhund mix tierschutz", "tierschutz bayern",
 ] + ([f"{DOG_NAME} rüde"] if DOG_NAME else [])
 REGIONS = {"bayern": "l5510", "deutschland": ""}  # Bayern + bundesweit
 PAGES = 5  # per --pages überschreibbar; tiefere Seiten = ältere Anzeigen
@@ -47,6 +48,7 @@ WEB_QUERIES = [
     'Husky Mischling Fundhund Oberbayern', 'VW Caddy Hund gestohlen Oberbayern',
     'Schäferhund Husky Salzburg zugelaufen', 'willhaben Schäferhund Husky Rüde',
     'ovčák husky kříženec pes nalezen', 'owczarek husky mieszaniec znaleziony',
+    '"Tierschutz Bayern" Hund abgeholt', 'falsche Tierschützer Hund Oberbayern', 'Schäferhund Husky Mischling Schutzgebühr Rüde',
 ] + ([f'"{DOG_NAME}" Schäferhund Husky'] if DOG_NAME else [])
 WEB_PER_RUN = 4  # DuckDuckGo blockt schnell -> pro Lauf nur wenige, rotierend
 
@@ -56,7 +58,10 @@ RULES = [  # (regex, punkte, label)
     (r"husk[yi]|hasky", 3, "Husky"),
     (r"sch(ä|ae|a)fer|ovč[áa]k|ovčiak|ovcak|owczar|herder|pastore|juhász|shepherd", 3, "Schäferhund"),
     (r"\brüde|\bruede|\bsamec|\bpsík|\bpies\b|\breu\b|maschio|\bkan\b", 1, "Rüde"),
-    (r"\b3\s*(jahre|j\.|jährig|roky|roku|lata|jaar|anni|éves)|2023\s*geb|geb\w*\s*2023|dreijährig", 2, "~3 Jahre"),
+    (r"\b[34]\s*(jahre|j\.|jährig|roky|roku|lata|jaar|anni|éves)|202[23]\s*geb|geb\w*\s*202[23]|dreijährig|vierjährig", 2, "~3-4 Jahre"),
+    # Masche laut Presse: junges Pärchen gab sich als "Tierschutz Bayern" aus -> Weiterverkauf als "Tierschutzhund"
+    (r"tierschutz bayern", 4, "»Tierschutz Bayern«"),
+    (r"schutzgebühr|tierschutz|vermittlung|notfell|pflegestelle|vom tierschutz|adopt", 1.5, "Tierschutz-Vermittlung (Masche)"),
     (r"bernstein|amber|goldene augen|helle augen|jantar|bursztyn|ambra", 3, "Bernstein-Augen"),
     (r"pinsel|büschel|buschel|haarbüschel|štětec|pędzel", 3, "Pinsel/Büschel am Ohr"),
     (r"zugelaufen|gefunden|aufgefunden|streuner|nalezen|najden|znalezion|gevonden|trovato|talált", 3, "Zugelaufen/Gefunden"),
@@ -255,9 +260,15 @@ MANUAL_LINKS = [
 FLAGS = {'DE': '🇩🇪', 'AT': '🇦🇹', 'CZ': '🇨🇿', 'SK': '🇸🇰', 'PL': '🇵🇱', 'NL': '🇳🇱', 'IT': '🇮🇹', 'HU': '🇭🇺'}
 
 
+def mask(t):
+    """Hundename nie im öffentlichen Report zeigen (auch nicht aus gescrapten Artikeln)."""
+    return re.sub(rf"\b{re.escape(DOG_NAME)}\b", "•••", t or "", flags=re.I) if DOG_NAME else (t or "")
+
+
 def write_report(ads, run_time, total=0):
     rows = []
     for a in ads:
+        a = {**a, "title": mask(a["title"]), "desc": mask(a["desc"]), "url_text": mask(a["url"])}
         imgs = a.get("images") or ([a["img"]] if a.get("img") else [])
         thumbs = "".join(f'<a href="{i}{'?rule=$_59.AUTO' if 'kleinanzeigen' in i else ''}" target=_blank><img src="{i}{'?rule=$_2.AUTO' if 'kleinanzeigen' in i else ''}" loading=lazy></a>'
                          for i in [re.sub(r"\?.*", "", x) if "kleinanzeigen" in x else x for x in imgs[:6]])
@@ -378,7 +389,7 @@ def main():
         print(f"\n=== Scan {dt.datetime.now():%H:%M:%S} ===")
         hot = run_once(args.min_score, args.detail_score, args.pages, not args.no_js, not args.no_web)
         if hot and not first:
-            notify(f"Hundesuche: {len(hot)} neue(r) Treffer", "\n".join(f"[{a['score']:.0f}] {a['title'][:70]} – {a['loc']}" for a in hot[:5]), SITE_URL)
+            notify(f"Hundesuche: {len(hot)} neue(r) Treffer", "\n".join(f"[{a['score']:.0f}] {mask(a['title'])[:70]} – {a['loc']}" for a in hot[:5]), SITE_URL)
         first = False
         if not args.loop: break
         time.sleep(args.loop * 60 + random.randint(0, 90))
