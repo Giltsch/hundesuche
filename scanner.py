@@ -155,18 +155,34 @@ def web_search(q):
     return out
 
 
-def run_js_scraper(pages):
+def start_js_scraper(pages):
+    """Startet den Playwright-Scraper als Hintergrundprozess (läuft parallel zu Kleinanzeigen)."""
     js = BASE / "scraper.js"
     if not js.exists():
-        return []
-    print(f"  JS-Scraper (Playwright, {pages} Seiten/Quelle) läuft …")
+        return None
+    print(f"  JS-Scraper (Playwright, {pages} Seiten/Quelle) gestartet – läuft parallel …")
     try:
-        r = subprocess.run(["node", str(js), "--pages", str(pages)], cwd=BASE, capture_output=True, text=True, timeout=3600)
-        print("  " + "\n  ".join(r.stdout.strip().splitlines()[-3:]))
+        return subprocess.Popen(["node", str(js), "--pages", str(pages)], cwd=BASE,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True), time.time()
     except Exception as e:
         print(f"  ! JS-Scraper: {e}", file=sys.stderr)
+        return None
+
+
+def collect_js_scraper(handle):
+    if not handle:
+        return []
+    proc, t0 = handle
     try:
-        return json.loads((BASE / "js_results.json").read_text())["ads"]
+        out, _ = proc.communicate(timeout=3600)
+        print("  " + "\n  ".join(out.strip().splitlines()[-3:]))
+    except subprocess.TimeoutExpired:
+        proc.kill(); print("  ! JS-Scraper: Timeout", file=sys.stderr)
+    f = BASE / "js_results.json"
+    try:
+        if f.stat().st_mtime < t0:  # keine alten Ergebnisse als neu ausgeben
+            print("  ! JS-Scraper: keine frischen Ergebnisse", file=sys.stderr); return []
+        return json.loads(f.read_text())["ads"]
     except Exception:
         return []
 
@@ -460,7 +476,10 @@ def scan_kleinanzeigen(pages, found):
 def run_once(min_score, detail_score, pages=PAGES, use_js=True, use_web=True):
     seen = load_seen()
     found = {}
+    js = start_js_scraper(pages) if use_js else None
+    t0 = time.time()
     scan_kleinanzeigen(pages, found)
+    print(f"  Kleinanzeigen fertig nach {time.time() - t0:.0f}s")
     if use_web:
         k = int(time.time() // 3600) % len(WEB_QUERIES)  # rotierend: pro Lauf andere Suchen
         for q in (WEB_QUERIES * 2)[k:k + WEB_PER_RUN]:
@@ -471,9 +490,9 @@ def run_once(min_score, detail_score, pages=PAGES, use_js=True, use_web=True):
             except Exception as e:
                 print(f"  ! web {q}: {e}", file=sys.stderr); break
             time.sleep(random.uniform(12, 25))
-    if use_js:
-        for a in run_js_scraper(pages):
-            found.setdefault(a["id"], a)
+    for a in collect_js_scraper(js):
+        found.setdefault(a["id"], a)
+    print(f"  alle Quellen fertig nach {time.time() - t0:.0f}s")
     print(f"→ {len(found)} unique Anzeigen/Treffer, scoren …")
 
     cands = []
