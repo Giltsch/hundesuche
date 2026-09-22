@@ -78,7 +78,7 @@ const pageUrl = (tpl, n, src = {}) => {
 
 function parseCard(c, src) {
   const lines = c.text.split('\n').map(s => s.trim()).filter(Boolean);
-  const junk = l => /^(top|premium|merken|neu|neuer preis|noch \d+ tage?|bewaren.*|reserviert|gestern|heute.*|\d[\d.,:\s-]*(€|eur|kč|zł)?|[\d.]+\s*(km)?)$/i.test(l) || /^\d{1,2}\.\d{1,2}\.\d{2,4}/.test(l);
+  const junk = l => /^(top|premium|merken|neu|neuer preis|noch \d+ tage?|bewaren.*|reserviert|gestern|heute.*|\d[\d.,:\s-]*(€|eur|kč|zł)?|[\d.]+\s*(km)?)$/i.test(l) || /^\d{1,2}\.\d{1,2}\.\d{2,4}/.test(l) || /^\d{4,5}\s+\S+/.test(l);
   const clean = l => l.replace(/^Bewaren in Mijn Favorieten/i, '').trim();
   const cands = [c.title, ...lines].map(x => clean(x || '').split('\n')[0]).filter(l => l.length >= 10 && !junk(l));
   const title = (cands[0] || lines[0] || '').slice(0, 160);

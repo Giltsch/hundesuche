@@ -490,7 +490,7 @@ def run_once(min_score, detail_score, pages=PAGES, use_js=True, use_web=True):
     hot_new = [a for a in cands if a["is_new"] and a["score"] >= 8 and a["cat"] in ("angebot", "fund")]
     print(f"→ {len(cands)} Kandidaten ≥ {min_score}, davon {len(hot_new)} neue heiße. Report: {REPORT}")
     for a in cands[:25]:
-        print(f"  {a['score']:5.1f} {a['cat'][:8]:8} {str(a['km'] or '?'):>5}km {'NEU ' if a['is_new'] else '    '}{a['source'][:13]:13} {a['title'][:55]:55} {a['loc'][:22]:22} {a['date'][:10]:10} {a['url']}")
+        print(f"  {a['score']:5.1f} {a['cat'][:8]:8} {str(a['km'] or '?'):>5}km {'NEU ' if a['is_new'] else '    '}{a['source'][:13]:13} {mask(a['title'])[:55]:55} {a['loc'][:22]:22} {a['date'][:10]:10} {mask(a['url'])}")
     return hot_new
 
 
