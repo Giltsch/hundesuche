@@ -315,9 +315,24 @@ def locate(a):
 RX_LOST = re.compile(r"vermisst|entlaufen|weggelaufen|ausgebüxt|gestohlen|geklaut|entwendet|belohnung|wer .{0,40}gesehen|gesehen hat|kontakt besitzer|"
                      r"such(e|en) (unseren|unsere|meinen|meine)|missing|pohřeš|ztracen|zaginą|zaginął|zaginęła|vermist|"
                      r"smarrit|scompars|elveszett|eltűnt|ukraden|skradzion", re.I)
-RX_FOUND = re.compile(r"zugelaufen|aufgefunden|fundhund|fundtier|hund gefunden|gefunden am|streuner|nalezen|najden|"
+RX_FOUND = re.compile(r"zugelaufen|aufgefunden|fundhund|fundtier|\bgefunden\b|streuner|nalezen|najden|"
                       r"znalezion|gevonden|trovato|talált|besitzer gesucht|halter gesucht", re.I)
 CATS = {"angebot": "Angebote", "fund": "Fundtiere", "vermisst": "Vermisst-Meldungen", "presse": "Presse/Web"}
+
+
+RX_OTHER_ANIMAL = re.compile(r"katze|kater\b|kätzchen|kitten|mieze|kaninchen|\bhase\b|meerschwein|vogel|papagei|sittich|"
+                             r"pferd|pony|schildkröte|frettchen|hamster|kočk|kocour|\bkot(ek|ka)?\b|gatt[oi]|gattino|macska|\bpoes\b|\bkat\b", re.I)
+RX_DOG = re.compile(r"hund|rüde|husky|schäfer|schaefer|welpe|\bdog\b|\bpes\b|psík|\bpies\b|psa\b|owczar|ovč|\bcane\b|kutya|\bhond|herder|pastore", re.I)
+
+
+def is_other_animal(a):
+    """Katzen & Co. aussortieren; Hundeanzeigen mit 'katzenverträglich' bleiben drin."""
+    if a.get("source") == "web":
+        return False
+    t, text = a.get("title", ""), f"{a.get('title', '')} {a.get('desc', '')}"
+    if RX_OTHER_ANIMAL.search(t) and not RX_DOG.search(t):
+        return True
+    return not RX_DOG.search(text) and bool(RX_OTHER_ANIMAL.search(text))
 
 
 def classify(a):
@@ -370,7 +385,7 @@ a{{color:inherit}}.ref{{display:flex;gap:8px;overflow-x:auto}}.ref img{{height:1
 select,input[type=search]{{font:inherit;padding:5px 8px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink)}}
 .chip{{font-size:13px;background:var(--chip);border-radius:14px;padding:3px 8px;white-space:nowrap}}
 .card{{display:flex;gap:12px;background:var(--card);border-radius:10px;padding:12px;margin:10px 0;border-left:6px solid var(--line)}}
-.hot{{border-color:var(--hot)}}.warm{{border-color:var(--warm)}}.s{{font-size:22px;font-weight:700;min-width:36px}}
+.card[hidden]{{display:none!important}}.hot{{border-color:var(--hot)}}.warm{{border-color:var(--warm)}}.s{{font-size:22px;font-weight:700;min-width:36px}}
 .body{{flex:1;min-width:0;overflow-wrap:anywhere}}h3{{margin:0 0 4px;font-size:16px}}.meta,.why{{color:var(--mute);font-size:13px;margin:2px 0}}.why{{color:var(--acc)}}
 .km{{color:var(--ink)}}.desc{{white-space:pre-wrap;font-size:13px}}.th{{display:flex;flex-wrap:wrap}}.th img{{height:100px;margin:2px;border-radius:6px}}
 .src{{font-size:12px;background:var(--chip);padding:1px 6px;border-radius:4px;color:var(--mute)}}.new{{color:#fff;background:var(--hot);padding:1px 6px;border-radius:4px}}
@@ -476,6 +491,9 @@ def run_once(min_score, detail_score, pages=PAGES, use_js=True, use_web=True):
             elif a["score"] >= detail_score:
                 enrich_detail(a); a["detail"] = True
                 a["score"], a["why"] = score(a["title"] + " " + a["desc"] + extra + " " + " ".join(f"{k} {v}" for k, v in a.get("details", {}).items()), a["plz"], posted)
+        if is_other_animal(a):
+            seen[a["id"]] = {"first_seen": prev["first_seen"] if prev else dt.datetime.now().strftime("%d.%m. %H:%M"), "title": a["title"], "score": -99}
+            continue
         a["cat"] = classify(a)
         a["km"], a["km_exact"] = locate(a)
         a["is_new"] = a["id"] not in seen
