@@ -76,7 +76,7 @@ RULES = [  # (regex, punkte, label)
     (r"hündin|huendin|\bfen(a|ka|ku|ečka)\b|\bsuk[ai]\b|\bteef\b|femmina|szuka", -4, "Hündin"),
     (r"deckrüde|deckakt|zucht", -2, "Zucht"),
 ] + ([(rf"\b{re.escape(DOG_NAME)}\b", 5, "Name passt")] if DOG_NAME else []) + [
-    (r"chihuahua|malteser|dackel|yorkshire|pudel|spitz|mops|bulldog|labrador|retriever|terrier|havaneser|shih|pomeranian|beagle|border collie|australi(an|en) shepherd|aussie|dobermann|rottweiler|cane corso|malinois|belgisch", -3, "andere Rasse"),
+    (r"chihuahua|malteser|dackel|yorkshire|pudel|spitz|mops|bulldog|labrador|retriever|terrier|havaneser|shih|pomeranian|beagle|border collie|australi(an|en) shepherd|aussie|dobermann|rottweiler|cane corso|malinois|belgisch|belgick|belgijsk|mallorquin", -3, "andere Rasse"),
     (r"suche\b|gesucht", -1, "Suchanzeige"),
 ]
 NEAR_PLZ = ("835", "834", "845", "84", "83", "85", "81", "80")  # Haag i.OB = 83527
@@ -257,7 +257,78 @@ MANUAL_LINKS = [
 ]
 
 
-FLAGS = {'DE': '🇩🇪', 'AT': '🇦🇹', 'CZ': '🇨🇿', 'SK': '🇸🇰', 'PL': '🇵🇱', 'NL': '🇳🇱', 'IT': '🇮🇹', 'HU': '🇭🇺'}
+FLAGS = {'DE': '🇩🇪', 'AT': '🇦🇹', 'CZ': '🇨🇿', 'SK': '🇸🇰', 'PL': '🇵🇱', 'NL': '🇳🇱', 'IT': '🇮🇹', 'HU': '🇭🇺', 'CH': '🇨🇭'}
+
+# --- Entfernung ab Haag i. OB --------------------------------------------------
+HOME = (48.1617, 12.1797)
+COUNTRY_CENTER = {"AT": (47.6, 14.1), "CZ": (49.8, 15.5), "SK": (48.7, 19.7), "PL": (52.1, 19.4),
+                  "NL": (52.2, 5.5), "IT": (43.0, 12.5), "HU": (47.2, 19.4), "CH": (46.8, 8.2)}
+_GEO = None
+
+
+def _norm(s):
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKD", s.lower()) if not unicodedata.combining(c)).strip()
+
+
+def _geo():
+    global _GEO
+    if _GEO is None:
+        try: _GEO = json.loads((BASE / "geo.json").read_text())
+        except Exception: _GEO = {"plz": {}, "places": {}}
+    return _GEO
+
+
+def km_between(a, b):
+    import math
+    la1, lo1, la2, lo2 = map(math.radians, (*a, *b))
+    h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
+    return 6371 * 2 * math.asin(math.sqrt(h))
+
+
+def locate(a):
+    """-> (km, exakt?) oder (None, False). DE/AT/CH über PLZ, sonst Ortsname im Text/URL, sonst Landesmitte."""
+    g, cc = _geo(), a.get("country", "DE")
+    if a.get("source") == "web":
+        return None, False
+    text = f"{a.get('loc', '')} {a.get('title', '')} {a.get('desc', '')[:400]}"
+    if cc in ("DE", "AT", "CH"):
+        for m in re.finditer(r"\b(\d{5})\b" if cc == "DE" else r"\b(\d{4})\b", a.get("loc") or text):
+            p = g["plz"].get(f"{cc}:{m.group(1)}")
+            if p: return round(km_between(HOME, p)), True
+    # Ortsnamen: n-Gramme aus Ort, URL-Slug und Text (längste zuerst)
+    slug = re.sub(r"[-_/]+", " ", urllib.parse.unquote(urllib.parse.urlparse(a.get("url", "")).path))
+    words = re.findall(r"[^\W\d_][^\W\d_'.-]*", f"{a.get('loc', '')} {slug} {text}")
+    for n in (3, 2, 1):
+        for i in range(len(words) - n + 1):
+            key = _norm(" ".join(words[i:i + n]))
+            if len(key) < 4: continue
+            p = g["places"].get(f"{cc}:{key}")
+            if p and (n > 1 or words[i][0].isupper() or cc != "DE"):
+                return round(km_between(HOME, p)), True
+    if cc in COUNTRY_CENTER:
+        return round(km_between(HOME, COUNTRY_CENTER[cc])), False
+    return None, False
+
+
+# --- Kategorie: Angebot / Fund / Vermisst / Presse ---------------------------------
+RX_LOST = re.compile(r"vermisst|entlaufen|weggelaufen|ausgebüxt|gestohlen|geklaut|entwendet|belohnung|wer .{0,40}gesehen|gesehen hat|kontakt besitzer|"
+                     r"such(e|en) (unseren|unsere|meinen|meine)|missing|pohřeš|ztracen|zaginą|zaginął|zaginęła|vermist|"
+                     r"smarrit|scompars|elveszett|eltűnt|ukraden|skradzion", re.I)
+RX_FOUND = re.compile(r"zugelaufen|aufgefunden|fundhund|fundtier|hund gefunden|gefunden am|streuner|nalezen|najden|"
+                      r"znalezion|gevonden|trovato|talált|besitzer gesucht|halter gesucht", re.I)
+CATS = {"angebot": "Angebote", "fund": "Fundtiere", "vermisst": "Vermisst-Meldungen", "presse": "Presse/Web"}
+
+
+def classify(a):
+    if a.get("source") == "web":
+        return "presse"
+    t, d = a.get("title", ""), a.get("desc", "")
+    for txt in (t, d[:300]):
+        f, l = RX_FOUND.search(txt), RX_LOST.search(txt)
+        if f and (not l or f.start() < l.start()): return "fund"
+        if l: return "vermisst"
+    return "vermisst" if a.get("lost") else "angebot"
 
 
 def mask(t):
@@ -266,33 +337,81 @@ def mask(t):
 
 
 def write_report(ads, run_time, total=0):
-    rows = []
+    rows, counts, countries = [], {k: 0 for k in CATS}, set()
     for a in ads:
-        a = {**a, "title": mask(a["title"]), "desc": mask(a["desc"]), "url_text": mask(a["url"])}
+        a = {**a, "title": mask(a["title"]), "desc": mask(a["desc"])}
+        counts[a["cat"]] += 1; countries.add(a.get("country", "DE"))
         imgs = a.get("images") or ([a["img"]] if a.get("img") else [])
-        thumbs = "".join(f'<a href="{i}{'?rule=$_59.AUTO' if 'kleinanzeigen' in i else ''}" target=_blank><img src="{i}{'?rule=$_2.AUTO' if 'kleinanzeigen' in i else ''}" loading=lazy></a>'
+        thumbs = "".join(f'<a href="{i}{"?rule=$_59.AUTO" if "kleinanzeigen" in i else ""}" target=_blank><img src="{i}{"?rule=$_2.AUTO" if "kleinanzeigen" in i else ""}" loading=lazy alt=""></a>'
                          for i in [re.sub(r"\?.*", "", x) if "kleinanzeigen" in x else x for x in imgs[:6]])
         cls = "hot" if a["score"] >= 10 else "warm" if a["score"] >= 7 else ""
-        new = '<b class=new>NEU</b> ' if a.get("is_new") else ""
-        rows.append(f"""<div class="card {cls}"><div class=s>{a['score']:.1f}</div><div class=body>
-<h3>{new}<span class=src>{FLAGS.get(a.get('country','DE'),'')} {html.escape(a.get('source',''))}</span> <a href="{a['url']}" target=_blank>{html.escape(a['title'])}</a></h3>
-<p class=meta>📍 {html.escape(a['loc'])} · 📅 {html.escape(a['date'])} · 💶 {html.escape(a['price'])} · zuerst gesehen {a.get('first_seen','')}</p>
+        km = a.get("km")
+        kmtxt = "" if km is None else (f"{km} km" if a.get("km_exact") else f"≈ {km} km")
+        posted = parse_date(a.get("date") or "")
+        rows.append(f"""<div class="card {cls}" data-cat="{a['cat']}" data-km="{'' if km is None else km}" data-score="{a['score']:.1f}" data-date="{posted.isoformat() if posted else ''}" data-cc="{a.get('country', 'DE')}" data-new="{1 if a.get('is_new') else 0}"><div class=s>{a['score']:.0f}</div><div class=body>
+<h3>{'<b class=new>NEU</b> ' if a.get('is_new') else ''}<span class=src>{FLAGS.get(a.get('country', 'DE'), '')} {html.escape(a.get('source', ''))}</span> <a href="{html.escape(a['url'])}" target=_blank rel=noopener>{html.escape(a['title'] or '(ohne Titel)')}</a></h3>
+<p class=meta>{f'<b class=km>{kmtxt}</b> · ' if kmtxt else ''}📍 {html.escape(mask(a['loc']))} · 📅 {html.escape(a['date'])} · 💶 {html.escape(a['price'])} · gesehen {a.get('first_seen', '')}</p>
 <p class=why>{' · '.join(html.escape(w) for w in a['why'])}</p>
 <p class=desc>{html.escape(a['desc'][:600])}</p><div class=th>{thumbs}</div></div></div>""")
-    links = "".join(f'<li><a href="{u}" target=_blank>{html.escape(n)}</a></li>' for n, u in MANUAL_LINKS)
+    links = "".join(f'<li><a href="{u}" target=_blank rel=noopener>{html.escape(n)}</a></li>' for n, u in MANUAL_LINKS)
+    tabs = "".join(f'<button class=tab data-cat="{k}">{v} <span>{counts[k]}</span></button>' for k, v in CATS.items())
+    ccs = "".join(f'<label class=chip><input type=checkbox value="{c}" checked> {FLAGS.get(c, "")} {c}</label>' for c in sorted(countries, key=lambda c: (c != "DE", c)))
     REPORT.write_text(f"""<!doctype html><html lang=de><meta charset=utf-8><title>Hundesuche</title><meta name=robots content="noindex,nofollow">
 <meta name=viewport content="width=device-width,initial-scale=1">
-<style>body{{font:15px system-ui;margin:0 auto;max-width:1000px;padding:16px;background:#f6f4ef;color:#222}}
-.ref{{display:flex;gap:8px}}.ref img{{height:180px;border-radius:8px}}
-.card{{display:flex;gap:12px;background:#fff;border-radius:10px;padding:12px;margin:10px 0;border-left:6px solid #ccc}}
-.hot{{border-color:#d33}}.warm{{border-color:#e9a200}}.s{{font-size:24px;font-weight:700;min-width:54px}}
-.body{{flex:1;min-width:0}}h3{{margin:0 0 4px}}.meta,.why{{color:#666;font-size:13px;margin:2px 0}}.why{{color:#2a6}}
-.desc{{white-space:pre-wrap;font-size:13px}}.th img{{height:110px;margin:2px;border-radius:6px}}.src{{font-size:12px;background:#eee;padding:1px 6px;border-radius:4px;color:#555}}.new{{color:#fff;background:#d33;padding:1px 6px;border-radius:4px}}
-</style><h1>🐕 Hundesuche</h1><p>Stand: {run_time} · {total} Anzeigen gescannt · {len(ads)} Kandidaten · gestohlen 19.08.2026, Haag i. OB</p>
-<div class=ref><img src="reference/dog_1.jpg"><img src="reference/dog_2.jpg"><img src="reference/dog_3.jpg"></div>
-<p><b>Merkmale:</b> Schäferhund-Husky-Rüde, 3 J., Bernstein-Augen, kleines pinselförmiges Haarbüschel im <b>rechten</b> Ohr, springt gern hoch, sieht jung aus. Verdacht: brauner VW Caddy, junges Pärchen.</p>
-<h2>Weitere Quellen (manuell prüfen)</h2><ul>{links}</ul>
-<h2>Treffer (nach Score)</h2>{''.join(rows)}</html>""", encoding="utf-8")
+<style>
+:root{{--bg:#f6f4ef;--card:#fff;--ink:#222;--mute:#666;--line:#ddd;--acc:#2a6;--hot:#d33;--warm:#e9a200;--chip:#eee}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#16181b;--card:#22252a;--ink:#e8e6e3;--mute:#9aa0a6;--line:#3a3d42;--acc:#5c9;--chip:#2e3238}}}}
+*{{box-sizing:border-box}}body{{font:15px system-ui;margin:0 auto;max-width:1000px;padding:16px;background:var(--bg);color:var(--ink)}}
+a{{color:inherit}}.ref{{display:flex;gap:8px;overflow-x:auto}}.ref img{{height:160px;border-radius:8px}}
+@media (min-width:760px){{.bar{{position:sticky;top:0;z-index:5}}}}
+.bar{{background:var(--bg);padding:8px 0;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px;align-items:center}}
+.tab{{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:20px;padding:6px 12px;font:inherit;cursor:pointer}}
+.tab.on{{background:var(--ink);color:var(--bg)}}.tab span{{opacity:.6;font-size:12px}}
+select,input[type=search]{{font:inherit;padding:5px 8px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink)}}
+.chip{{font-size:13px;background:var(--chip);border-radius:14px;padding:3px 8px;white-space:nowrap}}
+.card{{display:flex;gap:12px;background:var(--card);border-radius:10px;padding:12px;margin:10px 0;border-left:6px solid var(--line)}}
+.hot{{border-color:var(--hot)}}.warm{{border-color:var(--warm)}}.s{{font-size:22px;font-weight:700;min-width:36px}}
+.body{{flex:1;min-width:0;overflow-wrap:anywhere}}h3{{margin:0 0 4px;font-size:16px}}.meta,.why{{color:var(--mute);font-size:13px;margin:2px 0}}.why{{color:var(--acc)}}
+.km{{color:var(--ink)}}.desc{{white-space:pre-wrap;font-size:13px}}.th{{display:flex;flex-wrap:wrap}}.th img{{height:100px;margin:2px;border-radius:6px}}
+.src{{font-size:12px;background:var(--chip);padding:1px 6px;border-radius:4px;color:var(--mute)}}.new{{color:#fff;background:var(--hot);padding:1px 6px;border-radius:4px}}
+#count{{color:var(--mute);font-size:13px}}details{{margin:8px 0}}
+</style>
+<h1>🐕 Hundesuche</h1><p>Stand: {run_time} · {total} Anzeigen gescannt · {len(ads)} Kandidaten · gestohlen 19.08.2026, Haag i. OB (Entfernungen ab dort)</p>
+<div class=ref><img src="reference/dog_1.jpg" alt="Foto des Hundes"><img src="reference/dog_2.jpg" alt="Portrait"><img src="reference/dog_3.jpg" alt="Portrait im Auto"></div>
+<p><b>Merkmale:</b> Schäferhund-Husky-Rüde, 3–4 J., Bernstein-Augen, kleines pinselförmiges Haarbüschel im <b>rechten</b> Ohr, springt gern hoch, sieht jung aus.
+<b>Masche:</b> junges Pärchen gab sich als „Tierschutz Bayern“ aus; brauner VW Caddy.</p>
+<details><summary><b>Weitere Quellen (manuell prüfen)</b></summary><ul>{links}</ul></details>
+<div class=bar>{tabs}
+<select id=dist><option value=0>alle Entfernungen</option><option value=25>≤ 25 km</option><option value=50>≤ 50 km</option><option value=100>≤ 100 km</option><option value=200>≤ 200 km</option><option value=400>≤ 400 km</option></select>
+<select id=sort><option value=score>Sortierung: Score</option><option value=km>Entfernung</option><option value=date>Neueste</option></select>
+<label class=chip><input type=checkbox id=onlynew> nur neue</label>
+<input type=search id=q placeholder="Suche im Text …" size=14>
+<span>{ccs}</span><span id=count></span></div>
+<div id=list>{''.join(rows)}</div>
+<script>
+(()=>{{
+ const $=s=>document.querySelector(s),list=$('#list'),cards=[...list.children];
+ let st={{cat:'angebot',dist:0,sort:'score',onlynew:false,q:''}};
+ try{{Object.assign(st,JSON.parse(localStorage.getItem('hs')||'{{}}'))}}catch(e){{}}
+ const save=()=>{{try{{localStorage.setItem('hs',JSON.stringify({{cat:st.cat,dist:st.dist,sort:st.sort}}))}}catch(e){{}}}};
+ function render(){{
+  const off=new Set([...document.querySelectorAll('.chip input[value]')].filter(i=>!i.checked).map(i=>i.value));
+  const q=st.q.toLowerCase();
+  const vis=cards.filter(c=>c.dataset.cat===st.cat&&!off.has(c.dataset.cc)&&(!st.onlynew||c.dataset.new==='1')
+    &&(!st.dist||(c.dataset.km!==''&&+c.dataset.km<=st.dist))&&(!q||c.textContent.toLowerCase().includes(q)));
+  const key={{score:c=>-c.dataset.score,km:c=>c.dataset.km===''?1e9:+c.dataset.km,date:c=>-(Date.parse(c.dataset.date)||0)}}[st.sort];
+  vis.sort((a,b)=>key(a)-key(b)||b.dataset.score-a.dataset.score);
+  cards.forEach(c=>c.hidden=true);vis.forEach(c=>{{c.hidden=false;list.appendChild(c)}});
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.dataset.cat===st.cat));
+  $('#count').textContent=vis.length+' angezeigt';$('#dist').value=st.dist;$('#sort').value=st.sort;save();
+ }}
+ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{{st.cat=t.dataset.cat;render()}});
+ $('#dist').onchange=e=>{{st.dist=+e.target.value;render()}};$('#sort').onchange=e=>{{st.sort=e.target.value;render()}};
+ $('#onlynew').onchange=e=>{{st.onlynew=e.target.checked;render()}};$('#q').oninput=e=>{{st.q=e.target.value;render()}};
+ document.querySelectorAll('.chip input[value]').forEach(i=>i.onchange=render);
+ render();
+}})();
+</script></html>""", encoding="utf-8")
 
 
 # --- Main ---------------------------------------------------------------------
@@ -357,6 +476,8 @@ def run_once(min_score, detail_score, pages=PAGES, use_js=True, use_web=True):
             elif a["score"] >= detail_score:
                 enrich_detail(a); a["detail"] = True
                 a["score"], a["why"] = score(a["title"] + " " + a["desc"] + extra + " " + " ".join(f"{k} {v}" for k, v in a.get("details", {}).items()), a["plz"], posted)
+        a["cat"] = classify(a)
+        a["km"], a["km_exact"] = locate(a)
         a["is_new"] = a["id"] not in seen
         a["first_seen"] = prev["first_seen"] if prev else dt.datetime.now().strftime("%d.%m. %H:%M")
         if a["score"] >= min_score: cands.append(a)
@@ -366,10 +487,10 @@ def run_once(min_score, detail_score, pages=PAGES, use_js=True, use_web=True):
     SEEN_FILE.write_text(json.dumps(seen, ensure_ascii=False))
     now = dt.datetime.now().strftime("%d.%m.%Y %H:%M")
     write_report(cands, now, len(found))
-    hot_new = [a for a in cands if a["is_new"] and a["score"] >= 8]
+    hot_new = [a for a in cands if a["is_new"] and a["score"] >= 8 and a["cat"] in ("angebot", "fund")]
     print(f"→ {len(cands)} Kandidaten ≥ {min_score}, davon {len(hot_new)} neue heiße. Report: {REPORT}")
     for a in cands[:25]:
-        print(f"  {a['score']:5.1f} {'NEU ' if a['is_new'] else '    '}{a['source'][:13]:13} {a['title'][:55]:55} {a['loc'][:22]:22} {a['date'][:10]:10} {a['url']}")
+        print(f"  {a['score']:5.1f} {a['cat'][:8]:8} {str(a['km'] or '?'):>5}km {'NEU ' if a['is_new'] else '    '}{a['source'][:13]:13} {a['title'][:55]:55} {a['loc'][:22]:22} {a['date'][:10]:10} {a['url']}")
     return hot_new
 
 

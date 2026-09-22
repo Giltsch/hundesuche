@@ -83,7 +83,7 @@ function parseCard(c, src) {
   const cands = [c.title, ...lines].map(x => clean(x || '').split('\n')[0]).filter(l => l.length >= 10 && !junk(l));
   const title = (cands[0] || lines[0] || '').slice(0, 160);
   const date = (c.text.match(/\b(heute|gestern)\b(,?\s*\d{1,2}:\d{2})?|\b\d{1,2}\.\d{1,2}\.\d{2,4}\b/i) || [''])[0];
-  const locm = c.text.match(/\b(\d{5})\s+([A-ZÄÖÜ][\wäöüß.\- ]{2,40})/);
+  const locm = c.text.match(src.intl === 'AT' || src.intl === 'CH' ? /\b(\d{4})\s+([A-ZÄÖÜ][\wäöüß.\- ]{2,40})/ : /\b(\d{5})\s+([A-ZÄÖÜ][\wäöüß.\- ]{2,40})/);
   const price = (c.text.match(/\d[\d.]*,?-?\s*€|VB|zu verschenken/i) || [''])[0];
   return {
     id: src.site + ':' + c.url.split('?')[0], source: src.site, url: c.url, title,
