@@ -1,0 +1,57 @@
+name: scan
+
+on:
+  schedule:
+    - cron: "17 */3 * * *"   # alle 3 Stunden
+  workflow_dispatch:
+    inputs:
+      pages:
+        description: "Seiten pro Suche (mehr = ältere Anzeigen)"
+        default: "5"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci && npx playwright install --with-deps chromium
+
+      - name: Scan
+        env:
+          DOG_NAME: ${{ secrets.DOG_NAME }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          SITE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+          TZ: Europe/Berlin
+        run: python3 -u scanner.py --pages ${{ github.event.inputs.pages || '5' }}
+
+      - name: Zustand sichern (bereits gesehene Anzeigen)
+        run: |
+          git config user.name "scan-bot"
+          git config user.email "scan-bot@users.noreply.github.com"
+          git add seen.json
+          git diff --cached --quiet || git commit -m "scan $(date -u +%FT%H:%M)" && git push
+
+      - name: Website bauen
+        run: |
+          mkdir -p site/reference
+          cp report.html site/index.html
+          cp reference/dog_*.jpg site/reference/
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: site }
+      - id: deploy
+        uses: actions/deploy-pages@v4

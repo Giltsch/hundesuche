@@ -1,0 +1,10 @@
+node_modules/
+.venv/
+__pycache__/
+*.log
+js_results.json
+report.html
+site/
+check/
+reference/leo_*
+.DS_Store
